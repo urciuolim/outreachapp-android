@@ -42,14 +42,18 @@ import org.endcoronavirus.outreach.data.ContactDetailsParser;
 import org.endcoronavirus.outreach.models.AppState;
 import org.endcoronavirus.outreach.models.ContactDetails;
 import org.endcoronavirus.outreach.models.DataStorage;
+import org.endcoronavirus.outreach.models.LogEntry;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.text.DateFormat;
+import java.util.Date;
 
 public class ShowContactFragment extends Fragment {
     private static final String TAG = "ShowContactFragment";
 
     private static final int REQUEST_MAKE_CALL = 78;
+    private static final int CALL_ACTION = 1;
 
     private DataStorage mDataStorage;
     private View view;
@@ -58,6 +62,7 @@ public class ShowContactFragment extends Fragment {
 
     private ContentResolver contentResolver;
     private Cursor cursor;
+    private final DateFormat dateFormatter = DateFormat.getDateTimeInstance(DateFormat.LONG, DateFormat.LONG);
 
     @SuppressLint("InlinedApi")
     private static final String[] CONTACT_PROJECTION = {
@@ -91,6 +96,7 @@ public class ShowContactFragment extends Fragment {
                 NavHostFragment.findNavController(ShowContactFragment.this).popBackStack();
             }
         });
+
         return view;
     }
 
@@ -144,8 +150,8 @@ public class ShowContactFragment extends Fragment {
     @Override
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
         int id = item.getItemId();
-
-        switch  (id) {
+		
+        switch (id) {
             case R.id.command_menu_save:
                 saveContact();
                 Snackbar.make(view, R.string.message_contact_save_done, Snackbar.LENGTH_LONG).show();
@@ -179,6 +185,15 @@ public class ShowContactFragment extends Fragment {
                 numberUri = Uri.parse("tel:" + parser.getPhoneNumber(ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE));
                 Log.d(TAG, "Contact: " + contactDetails.contactId + " " + contactDetails.name + "found: " + numberUri.toString());
                 tryCall(numberUri);
+            }
+        });
+
+        b = view.findViewById(R.id.action_history);
+        b.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                NavHostFragment.findNavController(ShowContactFragment.this)
+                        .navigate(R.id.action_browse_log_entries);
             }
         });
     }
@@ -218,8 +233,36 @@ public class ShowContactFragment extends Fragment {
     }
 
     private void makeCall(Uri Number) {
+        AsyncTask<Void, Void, Boolean> addLogTask = new AsyncTask<Void, Void, Boolean>() {
+            @Override
+            protected Boolean doInBackground(Void... voids) {
+                LogEntry entry = new LogEntry();
+                entry.contactId = contactDetails.id;
+                entry.description = getString(R.string.log_try_call);
+                mDataStorage.logEntries().add(entry);
+
+                contactDetails.lastContacted = new Date();
+                int n = mDataStorage.contacts().updateLastContacted(contactDetails.id, contactDetails.lastContacted);
+                Log.d(TAG, "Updated " + n + " to " + contactDetails.lastContacted);
+                return null;
+            }
+        };
+        addLogTask.execute();
+
         Intent i = new Intent(Intent.ACTION_CALL, Number);
-        startActivity(i);
+        startActivityForResult(i, CALL_ACTION);
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        switch (requestCode) {
+            case CALL_ACTION:
+                Log.d(TAG, "Action CALL_ACTION result " + resultCode);
+                refresh();
+                break;
+        }
     }
 
     private void populatePage(Cursor cursor) {
@@ -230,7 +273,14 @@ public class ShowContactFragment extends Fragment {
 
         ((TextView) view.findViewById(R.id.field_name)).setText(name);
         ((TextView) view.findViewById(R.id.field_community)).setText(communityName);
+        ((TextView) view.findViewById(R.id.field_last_contact)).setText(
+                contactDetails.lastContacted != null ?
+                        dateFormatter.format(contactDetails.lastContacted) :
+                        getString(R.string.last_contact_never)
+        );
         ((EditText) view.findViewById(R.id.field_freetext_notes)).setText(contactDetails.notes);
+
+        Log.d(TAG, "Last Seen: " + contactDetails.lastContacted);
 
         Bitmap photo = BitmapFactory.decodeResource(getContext().getResources(),
                 android.R.mipmap.sym_def_app_icon);
@@ -265,6 +315,10 @@ public class ShowContactFragment extends Fragment {
 
     private Boolean load() {
         return true;
+    }
+
+    private void refresh() {
+        setupData();
     }
 
     private void setupData() {
